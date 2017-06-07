@@ -1,0 +1,177 @@
+---
+title: "DHX9-Alu interaction analysis"
+author: "Vivek B"
+date: "7.07.2015"
+output:
+  html_document:
+    css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+    theme: cerulean
+    toc: yes
+---
+  
+```{r settingUp,echo=FALSE,eval=FALSE,warning=FALSE}
+#load stuff
+library("ggplot2")
+library("reshape")
+library("gridExtra")
+library('plyr')
+library("gplots")
+library('RColorBrewer')
+
+dir.create("all_H_samples_enrichment")
+dir.create("HML_enrichments")
+dir.create("seqClustering_plots")
+
+## Estimate enrichment of repeats : 1st trial
+source("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/batchEnrichment.R")
+```
+
+Here I have done the estimation of Alu enrichment in DHX9 samples compared to others using two different approaches.
+
+## Repeat lib mapping and enrichment
+
+A repeat sequence library was constructed containing all repeat classes in human genome matching the following criteria:
+
+* Repeatmasker divergence score from cannonical should be < 30
+* Instance size should be > 150 bp.
+
+This led to a library of ~2000 repeat subfamilies. Library has cannonical seq and instance seperated by 100 "N" spacers. Each instance is given 20 bp overhang to allow junction reads to map. 
+
+Then I also create a complement library, containing the rest of the genome. And I mapped each sample to this library and also to it's complement using BWA. I then count the read mapping to each repeat family by following criteria:
+
+* A read should map to only one repeat subfamily in the library.
+* Read shouldn't map to the complement genome with same/ higher alignment score.
+
+I map samples and their corresponding empty vector controls and count the reads. Then I calculate Max Likelihood of enrichment for each rep family on sample over vector, normalized by ratio of total mappable reads. Total mappable reads is determined by a seperate alignment by bowtie2.
+
+I then cluster the samples by their MLE estimate and make heatmap to see which families are uniquely enriched in DHX9 vs others.
+
+
+### Results
+
+```{r plotMLEclusters1,echo=FALSE,eval=FALSE}
+## Let's do this shit!q
+calcMLE(repeatCountFolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/All_H/counts",
+        mappedCountFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/All_H/bowtie_wholeGenome/MappedReadCounts.txt",
+        matchFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/All_H/counts/mapping.txt",
+        outfolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/all_H_samples_enrichments/")
+
+res.merged <- multmerge(mypath = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/all_H_samples_enrichments/")
+
+pdf("H_allsamples_MLEheatmap.pdf")
+plotmappings(calcMLEoutput = res.merged,select = FALSE,selectArg = "B_merged",
+             mappedCountFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/All_H/bowtie_wholeGenome/MappedReadCounts.txt")
+plotMLE(calcMLEoutput = res.merged)
+dev.off()
+```
+
+
+```{r plotMLEclusters2,echo=FALSE,eval=FALSE}
+## Let's do this shit!
+# I am using masked counts, where the counts for the reads on genome are subtracted from the counts on repeats. 
+cf = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/HML_combined_DEQ/bowtie_output/MappedReadCounts.txt"
+calcMLE(repeatCountFolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/HML_combined_DEQ/count_tables/compMasked_counts",
+        mappedCountFile = cf,
+        matchFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/HML_combined_DEQ/bowtie_output/matches.txt",
+        outfolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/HML_enrichments")
+
+res.merged <- multmerge(mypath = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/HML_enrichments")
+
+
+pdf("HML_enrichments/HML_DEQ_MLEheatmap.pdf")
+    plotmappings(calcMLEoutput = res.merged,select = FALSE,selectArg = "B_merged",mappedCountFile = cf)
+    plotMLE(calcMLEoutput = res.merged)
+    plotMLE(calcMLEoutput = res.merged,aluOnly = TRUE)
+dev.off()
+
+# just plotting pheatmap output (code modified : 28.7.2016)
+pdf("HML_enrichments/HML_DEQ_MLEheatmap_2.pdf")
+plotMLE(calcMLEoutput = res.merged)
+dev.off()
+# Thw unmasked counts are in the folder "unComp", but subtracted results are better for plotting
+```
+
+**ALL**
+
+<img src="HML_enrichments/HML_enrichments_all.png">
+
+**ALU ONLY**
+
+<img src="HML_enrichments/HML_enrichments_alu.png">
+
+### Results (replicates merged)
+
+```{r plotMLEclusters3,echo=FALSE,eval=FALSE}
+## Let's do this shit!
+# I am using masked counts, where the counts for the reads on genome are subtracted from the counts on repeats. 
+cf = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/HML_combined_repmerged_DEQ/bowtie_output/MappedReadCounts.txt"
+calcMLE(repeatCountFolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/HML_combined_repmerged_DEQ/count_tables/compMasked_counts",
+        mappedCountFile = cf,
+        matchFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/HML_combined_repmerged_DEQ/bowtie_output/matches.txt",
+        outfolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/HML_enrichments/Replicates_merged")
+
+res.merged <- multmerge(mypath = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/HML_enrichments/Replicates_merged")
+
+
+pdf("HML_enrichments/Replicates_merged/HML_DEQ_MLEheatmap.pdf")
+    plotmappings(calcMLEoutput = res.merged,select = FALSE,selectArg = "B_merged",mappedCountFile = cf)
+    plotMLE(calcMLEoutput = res.merged)
+    plotMLE(calcMLEoutput = res.merged,aluOnly = TRUE)
+dev.off()
+
+# Thw unmasked counts are in the folder "unComp", but subtracted results are better for plotting
+res.clustering <- t(apply(res.clustering, 1, function(x) scale(x, center = FALSE))
+
+pdf("test.pdf")
+pheatmap(res.clustering, clustering_distance_rows = hrdist, fontsize_row = 2, annotation_row = annot, cluster_cols = FALSE)
+dev.off()
+```
+
+**ALL**
+
+<img src="HML_enrichments/Replicates_merged/HML_enrichments_all.png">
+
+**ALU ONLY**
+
+<img src="HML_enrichments/Replicates_merged/HML_enrichments_alu.png">
+
+
+## Repeat clustering and annotation from sequenced reads
+
+To see alu enrichment eve after avoiding any mapping at all, I cluster the repeats directly from the fasta files. For this, I first sampled 100K reads from each of these files, to make the number of nodes comparable for each sample in top clusters. Then pairwise alignment (BLAST) is performed with all the sampled reads, and the reads were clustered by overlaps with each other. Since repeat containing reads overlap more with each other, this method identifies the repeat clusters in the data. 
+
+After assembling the clusters, I run repeatmasker on reads in each cluster and detect the repeat families within. I then plot these clusters and annotate the three major Alu subfamilies within top clusters detected in each sample.
+
+
+```{r plotRepeatClusters, echo=FALSE,eval=FALSE}
+# plotting clusters using SeqGrapheR: YOU NEED TO INSTALL RGTK AND RGGOBI FOR THIS: Both require their 
+#linux counterparts (GTK2,GTK2-devel and GGOBI) to be installed first.
+library(devtools)
+install_github("vivekbhr/SeqGrapheR")
+
+library(SeqGrapheR)
+SeqGrapheR()
+
+# look at the manual here : http://cran.r-project.org/web/packages/SeqGrapheR/vignettes/SeqGrapheR.pdf
+# To provide IDs in ID list selector, I select the sequence IDs from repeatmasker output for AluS,AluJ,AluY and make a file of ID lists in each folder usng my script : make_IDlist.sh
+```
+
+***Following are the top clusters (cluster1) for each sample, annotated for Alu families (if present)***
+
+
+### Replicate A
+
+The colours may have to be changed (bgcolor=black).
+
+**Colors** : orange= AluS, yellow=AluY, Green=AluJ,Brown=Others
+
+<img src="seqClustering_plots/HML-combined_sampled/repA-annotated.png">
+
+
+### Replicates merged
+
+**Colors** : orange= AluS, yellow=AluY, Green=AluJ,Purple=Others
+
+
+<img src="seqClustering_plots/HML-combined_repmerged/merged_cl1.png">
+

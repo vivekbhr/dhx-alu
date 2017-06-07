@@ -1,0 +1,133 @@
+---
+title: "DHX9-Alu interaction analysis Part-2: Drosophila"
+author: "Vivek B"
+date: "20.07.2015"
+output:
+  html_document:
+    css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+    theme: cerulean
+    toc: yes
+---
+  
+```{r settingUp,echo=FALSE,eval=FALSE,warning=FALSE}
+#load stuff
+library("ggplot2")
+library("reshape")
+library("gridExtra")
+library('plyr')
+library("gplots")
+library('RColorBrewer')
+
+## Estimate enrichment of repeats : 1st trial
+source("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/batchEnrichment.R")
+```
+
+
+The analysis done for human samples are repeated here on drosophila samples.  
+
+## Repeat lib mapping and enrichment
+
+For repeat library mapping, new library was created using the same criteria as before, but using drosophila repeats(dm3, as dm6 library was not ye available on repeatmasker.org)
+
+
+### Results
+
+```{r plotMLEclusters1,echo=FALSE,eval=FALSE}
+## THIS ONE IS WITHOUT COMPLEMENT-MASKED COUNTS, JUST FOR ME
+cf = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_seperated/bowtie_output/MappedReadCounts.txt"
+calcMLE(repeatCountFolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_seperated/count_tables",
+        mappedCountFile = cf,
+        matchFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_seperated/bowtie_output/matches.txt",
+        outfolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/DROSOPHILA/libMapping_results/rep_seperated")
+
+res.merged <- multmerge(mypath = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/DROSOPHILA/libMapping_results/rep_seperated")
+
+pdf("DROSOPHILA/libMapping_results/fly_heatmap.pdf")
+plotmappings(calcMLEoutput = res.merged,select = FALSE,
+             mappedCountFile = cf)
+plotMLE_droso(calcMLEoutput = res.merged)
+dev.off()
+
+
+```
+
+
+```{r plotMLEclusters2,echo=FALSE,eval=FALSE}
+## Let's do this shit!
+# I am using masked counts, where the counts for the reads on genome are subtracted from the counts on repeats. 
+cf = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_seperated/bowtie_output/MappedReadCounts.txt"
+
+calcMLE(repeatCountFolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_seperated/count_tables/compMasked_counts",
+        mappedCountFile = cf,
+        matchFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_seperated/bowtie_output/matches.txt",
+        outfolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/DROSOPHILA/libMapping_results")
+
+res.merged <- multmerge(mypath = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/DROSOPHILA/libMapping_results")
+
+pdf("DROSOPHILA/libMapping_results/fly_heatmap-2.pdf")
+plotmappings(calcMLEoutput = res.merged,select = FALSE,
+             mappedCountFile = cf)
+plotMLE_droso(calcMLEoutput = res.merged)
+dev.off()
+
+# Thw unmasked counts are in the folder "unComp", but subtracted results are better for plotting
+```
+
+**ALL REPEATS**
+  
+<img src="DROSOPHILA/libMapping_results/rep_seperated/fly-heatmap-2_without-colClustering.png">
+
+### Results (replicates merged)
+  
+```{r plotMLEclusters3,echo=FALSE,eval=FALSE}
+## Let's do this shit!
+# I am using masked counts, where the counts for the reads on genome are subtracted from the counts on repeats. 
+cf = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_merged/bowtie_output/MappedReadCounts.txt"
+
+calcMLE(repeatCountFolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_merged/count_tables/compMasked_counts",
+        mappedCountFile = cf,
+        matchFile = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/03_DROSOPHILA/04_Alignments/rep_merged/bowtie_output/matches.txt",
+        outfolder = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/DROSOPHILA/libMapping_results/rep_merged")
+
+res.merged <- multmerge(mypath = "/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Rscripts_Dhx-Alu/DROSOPHILA/libMapping_results/rep_merged")
+
+pdf("DROSOPHILA/libMapping_results/rep_merged/fly_heatmap-2.pdf")
+plotmappings(calcMLEoutput = res.merged,select = FALSE,
+             mappedCountFile = cf)
+plotMLE_droso(calcMLEoutput = res.merged)
+dev.off()
+
+# Thw unmasked counts are in the folder "unComp", but subtracted results are better for plotting
+```
+
+**ALL**
+  
+<img src="DROSOPHILA/libMapping_results/rep_merged/fly-heatmap-2.png">
+  
+
+## Repeat clustering and annotation from sequenced reads
+
+
+```{r plotRepeatClusters, echo=FALSE,eval=FALSE}
+# plotting clusters using SeqGrapheR: YOU NEED TO INSTALL RGTK AND RGGOBI FOR THIS: Both require their 
+#linux counterparts (GTK2,GTK2-devel and GGOBI) to be installed first.
+library(SeqGrapheR)
+SeqGrapheR()
+
+# look at the manual here : http://cran.r-project.org/web/packages/SeqGrapheR/vignettes/SeqGrapheR.pdf
+# To provide IDs in ID list selector, I select the sequence IDs from repeatmasker output for AluS,AluJ,AluY and make a file of ID lists in each folder usng my script : make_IDlist.sh
+```
+
+***Following are the top clusters (cluster1) for each sample. I haven't coloured them, coz I didn't know what I wanted to visualize here***
+
+* No repeats were detected in the WT cluster.
+* KHR and MOck have same top cluster (rich in SSU-rRNA)
+* GET mutant cluster is rich in LTR-Copia elements.
+
+
+### Replicates merged
+  
+<img src="DROSOPHILA/repeatClustering_results/DROSO-allSamples.png">
+
+  
+  

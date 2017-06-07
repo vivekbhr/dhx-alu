@@ -1,0 +1,168 @@
+---
+  title: "DHX9-Alu interaction analysis"
+author: "Vivek B"
+date: "27.05.2015"
+output:
+  html_document:
+    theme: cerulean
+    toc: yes
+---
+  
+```{r settingUp,echo=FALSE,eval=TRUE,warning=FALSE}
+#load stuff
+library("ggplot2")
+library("reshape")
+library("gridExtra")
+library('plyr')
+library("gplots")
+library('RColorBrewer')
+
+## Estimate enrichment of repeats : 1st trial
+source("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/Scripts/Dey_et.al_pipeline/R/estimate_repenr.R")
+```
+
+```{r bginfo,echo=FALSE,eval=FALSE,warning=FALSE}
+# Number of mappable reads (estimated by bowtie)
+
+#~~~~~~~~~~~~ F1_h
+1024711 A_merged_hDHX9_FastqCleaned.fastq # 85% of 1205542
+91750 A_merged_heIF4A3_FastqCleaned.fastq # 78% of 117628 
+
+1083554 B_merged_hDHX9_FastqCleaned.fastq # 85% of 1274769
+101962 B_merged_heIF4A3_FastqCleaned.fastq # 87% of 117197
+
+23495  A_merged_F1_vec2_FastqCleaned.fastq #61% of 38515
+61470  B_merged_F1_vec2_FastqCleaned.fastq #76% of 80882
+
+# sampled files 
+100000 A_merged_hDHX9_FastqCleaned.fastq # 85% of 117197
+100000 B_merged_hDHX9_FastqCleaned.fastq # 85% of 1274769
+
+#~~~~~~~~~~~~~~~ F1_m
+99618 A_merged_heIF4A3_FastqCleaned.fastq # 79% of 218972
+185148  B_merged_heIF4A3_FastqCleaned.fastq # 83% of 223069
+
+35160  A_merged_F1_vec2_FastqCleaned.fastq # 62% of 56710
+100119  B_merged_F1_vec2_FastqCleaned.fastq # 69% of 145100
+
+# sampled files 
+192695 A_merged_hDHX9_FastqCleaned.fastq # 88 % of 218972
+196300 B_merged_hDHX9_FastqCleaned.fastq # 88 % of 223069
+
+```
+
+## Analysis explained
+
+This is a summary of what I did.
+
++ I created a small library of different repeat classes, containing cannonical sequence + repeat instances sampled from the genome.
+
++ I mapped three samples : Vector2, eIF and DHX9, both replicates, to this library and count the mapped reads to each repeat class.
+
++ Then I calculate the maximum likelihood estimate of enrichment for each repeat class for samples (DHX9 and eIF) over the negetive control,vector, normalized by total mappable reads (which I calculate by mapping to whole genome). DHX9 has much high depth, thus I downsample the reads to same number as eIF, to make it comparable.
+
+
+```{r calcMLE,echo=FALSE,eval=FALSE}
+# repA
+dhx9.sampcount <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/countTable/A_hDHX9_sampled.countTable",header=T)
+eIF.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/countTable/A_heIF4A3_count.table",header = T)
+vec.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/countTable/A_Vec2.countTable",header = T)
+estimate.repenr(output.base = "H_Dhx9SampvVec_repA",sc = dhx9.sampcount,ic = vec.count,ss = 100000,is = 23495)
+estimate.repenr(output.base = "H_eIFvVec_repA",sc = eIF.count,ic = vec.count ,ss = 91750,is = 23495)
+
+# repB
+dhx9.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/countTable/B_hDHX9_sampled.countTable",header=T)
+eIF.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/countTable/B_heIF4A3_count.table",header = T)
+vec.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/countTable/B_Vec2.countTable",header = T)
+estimate.repenr(output.base = "H_Dhx9SampvVec_repB",sc = dhx9.count,ic = vec.count,ss = 100000,is = 61470)
+estimate.repenr(output.base = "H_eIFvVec_repB",sc = eIF.count,ic = vec.count,ss = 101962,is = 61470)
+
+```
+
+
+```{r calcMLE_m,echo=FALSE,eval=FALSE}
+# repA
+dhx9.sampcount <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/F1_m/countTable/A_hDHX9_sampled.countTable",header=T)
+eIF.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/F1_m/countTable/A_heIF4A3.countTable",header = T)
+vec.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/F1_m/countTable/A_F1_vec2.countTable",header = T)
+estimate.repenr(output.base = "M_Dhx9SampvVec_repA",sc = dhx9.sampcount,ic = vec.count,ss = 192695,is = 35160)
+estimate.repenr(output.base = "M_eIFvVec_repA",sc = eIF.count,ic = vec.count ,ss = 99618,is = 35160)
+
+# repB
+dhx9.sampcount <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/F1_m/countTable/B_hDHX9_sampled.countTable",header=T)
+eIF.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/F1_m/countTable/B_heIF4A3.countTable",header = T)
+vec.count <- read.table("/data/akhtar/bhardwaj/2015_Ibu_dhx9-alu/04_Alignments/F1_m/countTable/B_F1_vec2.countTable",header = T)
+estimate.repenr(output.base = "M_Dhx9SampvVec_repB",sc = dhx9.count,ic = vec.count,ss = 196300,is = 100119)
+estimate.repenr(output.base = "M_eIFvVec_repB",sc = eIF.count,ic = vec.count,ss = 185148,is = 100119)
+
+```
+
+## Plot of MLE
+
+```{r plotMLE,echo=FALSE,eval=FALSE}
+## Read back the output
+
+alldat <- list(Dhx=list(repA=read.csv("H_Dhx9SampvVec_repA.csv",header=T,row.names=1),
+                        repB=read.csv("H_Dhx9SampvVec_repB.csv",header=T,row.names=1)),
+               eIF=list(repA=read.csv("H_eIFvVec_repA.csv",header=T,row.names=1),
+                        repB=read.csv("H_eIFvVec_repB.csv",header=T,row.names=1))
+               )
+for(n in names(alldat)){
+ alldat[[n]] <- lapply(alldat[[n]], function(x) x = x[2])                         
+  alldat[[n]] <- merge(alldat[[n]]$repA,alldat[[n]]$repB,by=0)
+}
+colnames(alldat$Dhx) = c("Repeat","mle.DHX.A","mle.DHX.B")
+colnames(alldat$eIF) = c("Repeat","mle.eIF.A","mle.eIF.B")
+
+alldat <- merge(alldat$Dhx,alldat$eIF,by="Repeat")
+rownames(alldat) <- alldat$Repeat
+alldat = alldat[2:5]
+alldat$fam = ifelse(grepl("AluS",rownames(alldat))==T,"AluS",
+                    ifelse(grepl("AluY",rownames(alldat))==T, "AluY",
+                           ifelse(grepl("AluJ",rownames(alldat))==T, "AluJ","Other")))
+# plot the mle estimates
+p1 <- ggplot(alldat,aes(fam,mle.DHX.A)) + geom_jitter(aes(color="repA")) + 
+  geom_jitter(aes(fam,mle.DHX.B,color="repB")) +   
+  labs(title="MLE : DHX9 over Vec2",colour="replicate",x="Repeat",y="MLE of enrichment")
+p2 <- ggplot(alldat,aes(fam,mle.eIF.A)) + geom_jitter(aes(color="repA")) + 
+  geom_jitter(aes(fam,mle.eIF.B,color="repB")) + 
+  labs(title="MLE : eIF over Vec2",colour="replicate",x="Repeat",y="MLE of enrichment")
+grid.arrange(p1,p2,ncol=1)
+
+#saved the file as alldat.h or alldat.m after replacing the "H" with "M" in the input file name
+alldat.m <- alldat
+alldat.h <- alldat
+
+```
+
+
+## Clustering by MLE
+
+The young Alu families cluster together and show enrichment in DHX9, but not in eIF, over control. I have removed the negative enrichment classes before clustering.
+
+
+```{r plotMLEClus,echo=FALSE,eval=FALSE}
+# cluster by MLE estimates
+alldat <- list(Fh=alldat.h,Fm=alldat.m)
+for(i in names(alldat)){
+  alldat[[i]][alldat[[i]] < 0] <- 0
+  alldat[[i]]$all = rowSums(alldat[[i]][1:4])
+  alldat[[i]] <- alldat[[i]][which(alldat[[i]]$all > 0),1:5]
+}
+
+#heatmap separetely
+heatmap.2(as.matrix(alldat$Fh[1:4]),Colv = FALSE,dendrogram = 'row',col = brewer.pal(9,"Blues"),
+          density.info = "none",trace="none",scale="row",cexCol=0.8,keysize=1.0)
+heatmap.2(as.matrix(alldat$Fm[1:4]),Colv = FALSE,dendrogram = 'row',col = brewer.pal(9,"Blues"),srtCol = 40,
+          density.info = "none",trace="none",scale="row",cexCol=0.8,key=FALSE,lhei=2)
+
+#heatmap togather
+alldat = merge(alldat$Fh,alldat$Fm,by=0)
+rownames(alldat) <- alldat$Row.names
+alldat = alldat[c(2:5,7:11)]
+colnames(alldat) <- c("H_mle.DHX.A","H_mle.DHX.B","H_mle.eIF.A","H_mle.eIF.B",
+                      "M_mle.DHX.A","M_mle.DHX.B","M_mle.eIF.A","M_mle.eIF.B","Repeat")
+heatmap.2(as.matrix(alldat[1:8]),dendrogram = 'both',col = brewer.pal(9,"Blues"),srtCol = 40,
+          density.info = "none",trace="none",scale="row",cexCol=0.8,keysize=1.0)
+
+```
