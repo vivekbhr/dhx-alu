@@ -1,0 +1,252 @@
+---
+title: "Dhx9 RNAseq : Differential expression"
+author: "@vivekbhr"
+date: "Wed Jun 29 16:30:21 2016"
+output:
+ html_document:
+  css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+  theme: cerulean
+  toc: yes
+---
+
+```{r loadLibs,  echo=FALSE,eval=TRUE,warning=FALSE,message=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(vivlib)
+library(ggvis)
+library(Glimma)
+```
+
+```{r mkdir, echo=FALSE,eval=FALSE}
+# directory to save extra plots
+system("mkdir _images")
+system("mkdir DESeq_results; mkdir DESeq_results/samplewise")
+```
+
+### Gene counts
+
+For poly-A samples the library had 40-50 Mil reads. ~90% mapped and >70% counted (30-40Mil). 
+Except for one sample: **HEK_s4019_4** which had only 17 Mil reads and 12Mil were counted at the end.
+
+For poly-A minus samples the library had around 30-40 Mil reads. ~85% mapped and ~30% counted into genes (8-12 Mil).
+
+```{r featurecounts, echo=FALSE, eval=TRUE, fig.width=12}
+fcount_out <- read.delim("../02_autoMapping/analysis_results/polyA_plus/featureCounts/counts.txt")
+# dafuq are the dots doin in gene name! Strip 'em
+fcount_out <- tidyr::separate(fcount_out, "X", c("geneID","crap"), "\\.")
+rownames(fcount_out) <- fcount_out$geneID
+fcount_out <- fcount_out[3:length(fcount_out)]
+
+# plot output
+fcount_out.melt <- reshape2::melt(fcount_out)
+
+#ggvis(fcount_out.melt,~variable, ~value, fill = ~variable) %>% layer_boxplots() %>%
+#        add_axis("x",title = "Sample") %>%
+#        add_axis("y", title = "Gene counts") %>% add_legend("fill", title = "Sample")
+ggplot(fcount_out.melt, aes(variable, value, col = variable)) + geom_boxplot() + scale_y_log10() +
+        labs(x = "sample", y = "log2(Counts)", fill = "Sample")  
+
+
+```
+
+## DESeq2 on poly-A transcripts 
+
+Results and plots saved under folder DESeq_results/samplewise. I have used DDR20 to denote siRNA 4020, and DDR19 to denote siRNA 4019.
+
+```{r DESeq, echo=FALSE, eval=FALSE}
+## DESeq2 , with 1% FDR (last time it was 5%)
+samples <- data.frame(row.names = colnames(fcount_out), condition = rep(c("Cnt","KD19","KD20"), 
+                                                                        each = 4))
+dds <- DESeqDataSetFromMatrix(countData = fcount_out, colData = samples, design = ~condition)
+dds <- DESeq(dds)
+ddrlist <- list(ddr19 = results(dds, alpha = 0.01, contrast = c("condition","KD19","Cnt")),
+                ddr20 = results(dds, alpha = 0.01, contrast = c("condition","KD20","Cnt"))
+                )
+
+# data frames of DEgenes
+ddrlist.df <- lapply(ddrlist, function(x) as.data.frame(x) )
+ddrlist.df.filt <- lapply(ddrlist.df, function(x) x[which(x$padj < 0.01), ] )
+# numbers for plotting
+ddrlist.df.plotdata <- lapply(ddrlist.df.filt, function(x) {
+                data.frame(Status = c("Up", "Down"), 
+                        Genes = c(length(which(x$log2FoldChange > 0)),
+                                length(which(x$log2FoldChange < 0)))
+                      )
+                })
+
+rld <- DESeq2::rlog(dds)
+decountlist <- DESeq2::counts(dds, normalized = TRUE)
+decountlist <- lapply(ddrlist.df.filt, function(df) {
+        merge(decountlist, df, by = 0)
+})
+
+select <- lapply(decountlist, function(x){
+        order(abs(x$log2FoldChange), decreasing = TRUE)
+})
+# data for heatmap
+heatmap_data = lapply(select, function(x) SummarizedExperiment::assay(rld)[x, ])
+
+# outlier data
+get_outlierInfo <- function(ddrlist, select, rld, dds, name) {
+                l <- list(W = ddrlist[[name]]$stat,
+                        maxCooks = apply(assays(dds)[["cooks"]], 1, max),
+                        m = ncol(dds),
+                        p = 3)
+                l$idx = !is.na(l$W)
+                return(l)
+}
+
+outlierInfo <- list(ddr19 = get_outlierInfo(ddrlist, select = select$ddr19, rld, dds, name = "ddr19"),
+                    ddr20 = get_outlierInfo(ddrlist, select = select$ddr20, rld, dds, name = "ddr20") )
+
+## plot results
+heatmap_topN <- 50
+select_hm <- lapply(select, function(x) return(x[1:heatmap_topN] ))
+
+plotwalds <- function(outlierInfo) {
+        plot(rank(outlierInfo$W[outlierInfo$idx]), outlierInfo$maxCooks[outlierInfo$idx], 
+        xlab = "rank of Wald statistic", 
+        ylab = "maximum Cook's distance per gene", ylim = c(0,5), cex = 0.4, col = rgb(0, 0, 0, 0.3))
+        abline(h = qf(0.99, outlierInfo$p, outlierInfo$m - outlierInfo$p))
+}
+
+## make PDF
+
+pdf("DESeq_results/samplewise/DESeq_plots_all.pdf")
+DESeq2::plotSparsity(dds)
+DESeq2::plotDispEsts(dds)
+print(DESeq2::plotPCA(rld))
+dev.off()
+
+pdf("DESeq_results/samplewise/DESeq_plots_samplewise.pdf")
+lapply(outlierInfo, plotwalds)
+lapply(names(heatmap_data), function(name){
+        toplot <- select_hm[[name]]
+        pheatmap::pheatmap(heatmap_data[[name]][toplot,], cluster_rows = TRUE, 
+                           clustering_method = "average", 
+        show_rownames = TRUE, cluster_cols = FALSE,  
+        main = sprintf("Sample %s : Heatmap : Top %d DE genes (by p-value)", name , heatmap_topN))
+        })
+
+lapply(ddrlist, function(ddr) DESeq2::plotMA(ddr) )
+lapply(ddrlist.df.plotdata, function(df){
+        print(ggplot2::ggplot(df, ggplot2::aes(Status, Genes, fill = Status)) + 
+                      ggplot2::geom_bar(stat = "identity", position = "dodge"))
+})
+dev.off()
+
+# output files
+Output <- "DESeq_results/samplewise/polyA_plus"
+save(dds, ddrlist, file = paste0(Output, "_DESeq.Rdata"))
+
+mapply( function(ddr.df,sample) {
+        write.table(ddr.df, file = paste0(Output,"_",sample,".out"), sep = "\t", quote = FALSE)
+                    },ddrlist.df,names(ddrlist.df))
+
+sink("DESeq_results/samplewise/sessionInfo.txt")
+sessionInfo()
+sink()
+```
+
+```{r annotation, echo=FALSE, eval=FALSE}
+# annotate
+annotate_DESeqOutput("DESeq_results/samplewise/polyA_plus_ddr19.out",
+                             Output = "DESeq_results/samplewise/polyA_plus_ddr19_annotated.out")
+annotate_DESeqOutput("DESeq_results/samplewise/polyA_plus_ddr20.out",
+                             Output = "DESeq_results/samplewise/polyA_plus_ddr20_annotated.out")
+
+```
+
+### Visualize the outputs
+
+I am playing a bit with interactive dataviz. You can zoom in and out of these plots and search any genes to get the counts. 
+
+In [this output](DESeq_results/samplewise/interactive/MD-Plot.html) genes which are diff-expressed in DDR20 are in Red, while genes which are diff-expressed in both DDR20 and DDR90 are in Blue..
+
+```{r annot, echo=FALSE, eval=TRUE}
+# prepare annotations for the plots below
+ddr20 <- read.delim("DESeq_results/samplewise/polyA_plus_ddr20_annotated.out")
+ddr20_dfgenes <- as.character(ddr20[which(ddr20$padj < 0.01), "Row.names"])
+ddr19 <- read.delim("DESeq_results/samplewise/polyA_plus_ddr19_annotated.out")
+ddr19_dfgenes <- as.character(ddr19[which(ddr19$padj < 0.01), "Row.names"])
+common <- intersect(ddr19_dfgenes, ddr20_dfgenes)
+
+# annotation for interactive result view
+annot <- ddr20[,c("Row.names","external_gene_name","description")]
+colnames(annot) <- c("GeneID", "Symbol","Description")
+annot$Category <- "None" 
+annot[which(annot$GeneID %in% setdiff(ddr19_dfgenes,ddr20_dfgenes) ), "Category"] <- "DDR19"
+annot[which(annot$GeneID %in% setdiff(ddr20_dfgenes, ddr19_dfgenes) ), "Category"] <- "DDR20"
+annot[which(annot$GeneID %in% common),"Category"] <- "Common"
+
+# plot Foldchanges of DDR19 vs 20 with DF genes
+
+mergeddf <- merge(ddr19, ddr20, by = 1)
+merged2 <- merge(mergeddf, annot, by = 1)
+merged2 <- dplyr::select(merged2, Row.names, log2FoldChange.x, log2FoldChange.y, Category)
+colnames(merged2) <- c("GeneID","logFC_DDR19","logFC_DDR20","Category")
+
+ggplot(merged2, aes(logFC_DDR19, logFC_DDR20, col = Category)) + 
+        geom_point(alpha = 0.4) + geom_hline(yintercept = 0) +
+        geom_vline(xintercept = 0)
+
+```
+
+```{r interact, echo=FALSE, eval=FALSE}
+groups = c(rep("control",4), rep("DDR19",4), rep("DDR20",4))
+samples = paste0(groups,"_",1:4)
+status <- ifelse(annot$Category == "DDR20", 1, 
+                       ifelse(annot$Category == "Common",  -1 , 0) ) # DDR19 will get grey color
+
+Glimma::glMDPlot(dds, anno = annot, id.column = "Symbol", display.columns = c("GeneID", "Symbol","Description","Category"),
+                 samples = samples, groups = groups, main = "Result", status = status,
+                  path = "DESeq_results/samplewise", folder = "interactive")
+
+```
+
+#### Number of affected genes
+
+```{r barchart, echo=FALSE, eval=TRUE}
+plotStackedBars("DESeq_results/samplewise/polyA_plus_ddr19_annotated.out",fdr = 0.01,sampleName = "DDR19")
+plotStackedBars("DESeq_results/samplewise/polyA_plus_ddr20_annotated.out",fdr = 0.01,sampleName = "DDR20")
+```
+
+#### Overlap between siRNAs
+
+Below is a volcano plot of DDR19, and I have overlapped genes affected in DDR20 on top of that (green)
+
+```{r annotation_plots, echo=FALSE, eval=TRUE, fig.height=8}
+# volcano plot with ddr19, overlap genes also affected in ddr20
+plotVolcano("DESeq_results/samplewise/polyA_plus_ddr19_annotated.out",fdr = 0.01, foldChangeLine = c(2,2),
+                    markGenes = "DHX9", colorGenes = ddr20_dfgenes, useGeneNames = TRUE)
+
+```
+
+The numbers are shown below.
+
+```{r numbers, echo=FALSE, eval=TRUE,  fig.height=4, fig.width=4, message=FALSE, warning=FALSE}
+plot.new()
+VennDiagram::draw.pairwise.venn(length(ddr19_dfgenes), length(ddr20_dfgenes), length(common), 
+                   category = c("DDR19", "DDR20"), 
+                   lty = rep("blank", 2), fill = c("light blue", "pink"), 
+                   alpha = rep(0.5, 2), cat.pos = c(0,0), cat.dist = rep(0.025, 2))
+```
+
+#### Overlap with Old KD
+
+How do new KDs compare to previous knockdown? We can see that in my SetPlot below.
+
+```{r compare, echo=FALSE, eval=TRUE}
+plotDEgeneOverlap(DEoutList = c("DESeq_results/samplewise/polyA_plus_ddr19_annotated.out",
+                                "DESeq_results/samplewise/polyA_plus_ddr20_annotated.out",
+                            "../../04_RNASeq/05_Downstream/dhx_seq_Rproject/DESeq_outputs/XR3_annotated.out"), 
+                  sampleNames = c("DDR19", "DDR20","KD_OLD"),FDRcutoff = 0.01)
+```
+
+Was the old KD done with DDR19 siRNA? 
+
+### Conclusions
+
+* DE analysis gives same number of genes as before (8-9k).
+* Around 5.5K genes overlap bw siRNAs and 3.3K with old data. So around 3-4k genes are probably reproducibly affected.
+* THESE RESULTS ARE HERE ONLY FOR COMPARISON. NOT TO BE USED IN FINAL ANALYSIS..

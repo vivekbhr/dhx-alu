@@ -1,0 +1,401 @@
+---
+title: "Dhx9 RNAseq : Differential expression"
+author: "@vivekbhr"
+date: "`r date()`"
+output:
+ html_document:
+  css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+  theme: cerulean
+  toc: yes
+---
+
+```{r loadLibs,  echo=FALSE,eval=FALSE,warning=FALSE,message=FALSE}
+library(edgeR)
+library(ggplot2)
+library(magrittr)
+library(limma)
+library(dplyr)
+library(vivlib)
+library(ggvis)
+library(Glimma)
+```
+
+```{r mkdir, echo=FALSE,eval=FALSE}
+# directory to save extra plots
+system("mkdir edgeR_results")
+```
+
+### Gene counts
+
+For description of gene counts, see [01_diffExpression_samplewise](./01_diffExpression_samplewise.html)
+
+## edgeR on poly-A transcripts 
+
+Results and plots saved under folder edgeR_results. I have used DDR20 to denote siRNA 4020, and DDR19 to denote siRNA 4019.
+
+```{r edgeR, echo=FALSE, eval=FALSE}
+fcount_out <- read.delim("../02_autoMapping/analysis_results/polyA_plus/featureCounts/counts.txt")
+# dafuq are the dots doin in gene name! Strip 'em
+fcount_out <- tidyr::separate(fcount_out, "X", c("geneID","crap"), "\\.")
+rownames(fcount_out) <- fcount_out$geneID
+fcount_out <- fcount_out[3:length(fcount_out)]
+
+## DESeq2 , with 5% FDR (last time it was 1%)
+samples <- data.frame(row.names = colnames(fcount_out), 
+                      group = as.factor(rep(c("Cnt","KD19","KD20"), each = 4)) )
+y <- DGEList(counts = fcount_out,group = samples$group,genes = rownames(fcount_out))
+y <- calcNormFactors(y)
+design <- model.matrix(~samples$group)
+y <- estimateDisp(y,design)
+fit <- glmQLFit(y,design)
+
+
+# apply QLFtest (better error control than LRT)
+qlflist <- list(ddr19 = glmQLFTest(fit,coef=2),
+                ddr20 = glmQLFTest(fit,coef=3) )
+
+# get results out (p < 0.05)
+qlfresultlist <- lapply(qlflist, function(fit) topTags(fit,n = Inf,sort.by = "PValue") )
+
+# data frames of DEgenes
+qlflist.df <- lapply(qlfresultlist, function(x) as.data.frame(x) )
+qlflist.df.filt <- lapply(qlflist.df, function(x) x[which(x$FDR < 0.05), ] )
+# numbers for plotting
+qlflist.df.plotdata <- lapply(qlflist.df.filt, function(x) {
+                data.frame(Status = c("Up", "Down"), 
+                        Genes = c(length(which(x$logFC > 0)),
+                                length(which(x$logFC < 0)))
+                      )
+                })
+
+
+###  DATA FOR HEATMAP
+## transformations to visualize
+logcpm <- cpm(y, prior.count=1, log=TRUE)
+
+#decountlist <- edgeR::getCounts(y, normalized = TRUE)
+decountlist <- lapply(qlflist.df.filt, function(df) {
+        merge(logcpm, df, by.x = 0, by.y = 1)
+})
+
+select <- lapply(decountlist, function(x){
+        order(abs(x$logFC), decreasing = TRUE)
+})
+
+heatmap_data = lapply(select, function(x) logcpm[x, ])
+heatmap_topN <- 50
+select_hm <- lapply(select, function(x) return(x[1:heatmap_topN] ))
+
+## make PDF
+p <- lapply(qlflist.df.plotdata, function(df){
+                ggplot2::ggplot(df, ggplot2::aes(Status, Genes, fill = Status)) + 
+                      ggplot2::geom_bar(stat = "identity", position = "dodge")
+})
+
+pdf("edgeR_results/edgeR_plots_all.pdf")
+edgeR::plotBCV(y)
+edgeR::plotMDS.DGEList(y,cex = 0.5)
+lapply(names(heatmap_data), function(name){
+        toplot <- select_hm[[name]]
+        pheatmap::pheatmap(heatmap_data[[name]][toplot,], 
+                           cluster_rows = TRUE, scale = "row",
+                           clustering_method = "average", 
+        show_rownames = TRUE, cluster_cols = FALSE,  
+        main = sprintf("Sample %s : Heatmap : Top %d DE genes (by p-value)", 
+                       name , heatmap_topN))
+
+#lapply(qlfresultlist, function(ddr) edgeR::maPlot(ddr) )
+gridExtra::grid.arrange(p$ddr19,p$ddr20, ncol = 2)
+dev.off()
+
+# output files
+Output <- "edgeR_results/polyA_plus"
+save(y, qlflist, file = paste0(Output, "_edgeR.Rdata"))
+
+mapply( function(ddr.df,sample) {
+        write.table(ddr.df, file = paste0(Output,"_",sample,".out"), row.names = FALSE,
+                    sep = "\t", quote = FALSE)
+                    },qlflist.df,names(qlflist.df))
+
+sink("edgeR_results/sessionInfo.txt")
+sessionInfo()
+sink()
+```
+
+```{r annotation, echo=FALSE, eval=FALSE}
+annotate_edgeR <- function(DESeqOutput, Output){
+                seqout <- read.delim(DESeqOutput,header = TRUE)
+                message("fetching annotation")
+                tofetch <- "hsapiens_gene_ensembl"
+                ensembl = biomaRt::useMart("ensembl",tofetch)
+                ext.data <- biomaRt::getBM(attributes = c("ensembl_gene_id","external_gene_name","description"),
+                                           mart = ensembl)
+                message("merging and writing")
+                outfile <- merge(seqout,ext.data,by = 1, all.x = TRUE)
+                write.table(outfile,Output,sep="\t", row.names = FALSE,quote=FALSE)
+        message("Done!")
+}
+
+# annotate
+annotate_edgeR("edgeR_results/polyA_plus_ddr19.out",
+                             Output = "edgeR_results/polyA_plus_ddr19_annotated.out")
+annotate_edgeR("edgeR_results/polyA_plus_ddr20.out",
+                             Output = "edgeR_results/polyA_plus_ddr20_annotated.out")
+
+```
+
+### DE results: concordance between samples
+
+```{r annot, echo=FALSE, eval=FALSE}
+# prepare annotations for the plots below
+ddr20 <- read.delim("edgeR_results/polyA_plus_ddr20_annotated.out")
+ddr20_dfgenes <- as.character(ddr20[which(ddr20$FDR < 0.05), "genes"])
+ddr19 <- read.delim("edgeR_results/polyA_plus_ddr19_annotated.out")
+ddr19_dfgenes <- as.character(ddr19[which(ddr19$FDR < 0.05), "genes"])
+common <- intersect(ddr19_dfgenes, ddr20_dfgenes)
+
+# annotation for interactive result view
+annot <- ddr20[,c("genes","external_gene_name","description")]
+colnames(annot) <- c("GeneID", "Symbol","Description")
+annot$Category <- "None" 
+annot[which(annot$GeneID %in% setdiff(ddr19_dfgenes,ddr20_dfgenes) ), "Category"] <- "DDR19"
+annot[which(annot$GeneID %in% setdiff(ddr20_dfgenes, ddr19_dfgenes) ), "Category"] <- "DDR20"
+annot[which(annot$GeneID %in% common),"Category"] <- "Common"
+
+# MAKE A DF WITH COMBINED RRESULTS
+mergeddf <- merge(ddr19, ddr20, by = 1, all = TRUE)
+merged_DEres <- merge(mergeddf, annot, by = 1, all = TRUE)
+merged_DEres <- dplyr::select(merged_DEres, genes, logFC.x, logFC.y, logCPM.x, logCPM.y, 
+                              Category, external_gene_name.y,description.y)
+colnames(merged_DEres) <- c("GeneID","logFC_DDR19","logFC_DDR20","logCPM_DDR19","logCPM_DDR20","Category","Symbol","Description")
+
+# plot Foldchanges of DDR19 vs 20 with DF genes
+pdf("edgeR_results/DEresult_foldChanges.pdf")#, res = 100, width = 800, height = 600
+ggplot(merged_DEres, aes(logFC_DDR19, logFC_DDR20, col = Category)) + 
+        scale_colour_manual(values = c("orange","darkgreen","navyblue", "grey80")) +
+        geom_point(alpha = 0.5) + theme_light(base_size = 15) +
+        geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+        labs(x = "log2 Fold Changes (DDR19)", y = "log2 Fold Changes (DDR20)")
+dev.off()
+```
+
+<img src="edgeR_results/DEresult_foldChanges.png" height = 600 width = 800>
+
+### DE results : selecting DE genes
+
+All the genes which are called differentially expressed in both the KDs, and show concordance between samples (logFC in same direction), are called differentially expressed.
+
+```{r diffExp, echo=FALSE, eval=FALSE}
+merged_DEres$DiffExp <- ifelse(merged_DEres$Category == "Common" & 
+                                  sign(merged_DEres$logFC_DDR19) == sign(merged_DEres$logFC_DDR20), TRUE, FALSE)
+merged_DEres$logFCmean <- rowMeans(merged_DEres[,c("logFC_DDR19" , "logFC_DDR20")])
+merged_DEres$logCPMmean <- rowMeans(merged_DEres[,c("logCPM_DDR19","logCPM_DDR20")])
+
+# column reordering
+merged_DEres %<>% select(-c(logCPM_DDR19, logCPM_DDR20))
+        
+write.table(merged_DEres, "edgeR_results/polyA_plus_DEgenes.out", row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+### Numbers
+
+```{r plotBARS, echo=FALSE, eval=FALSE}
+df <- filter(merged_DEres, DiffExp == TRUE)
+df$stat <- ifelse(df$logFCmean > 0, "UP","DOWN")
+df2 <- data.frame(Status = rep(c("UP","DOWN"),each = 2), 
+                  Level = rep(c("< 2 Fold", "> 2 Fold"),2))
+
+df2$Number <- c(sum(df$stat == "UP" & abs(df$logFCmean) < 1),
+                sum(df$stat == "UP" & abs(df$logFCmean) > 1),
+                sum(df$stat == "DOWN" & abs(df$logFCmean) < 1),
+                sum(df$stat == "DOWN" & abs(df$logFCmean) > 1) )
+
+png("edgeR_results/DEresult_stackedBar.png", res = 100, width = 700, height = 700)
+ggplot(df2, aes(Status,Number, fill = Status, alpha = Level)) + 
+        geom_bar(stat = "identity",colour = "black") + theme_grey(base_size = 16) +
+        scale_fill_manual(values = c("darkred", "darkgreen")) +
+        labs(title = "DE genes (divided by fold change)")
+dev.off()
+
+```
+
+<img src="edgeR_results/DEresult_stackedBar.png">
+
+### Visualize the outputs
+
+You can zoom in and out of these plots and search any genes to get the counts. 
+
+In [this output](./edgeR_results/interactive/MD-Plot.html) genes which are upregulated are in Red, while genes which are downregulated are in Blue..
+
+
+```{r interact, echo=FALSE, eval=FALSE}
+groups = c(rep("control",4), rep("DDR19",4), rep("DDR20",4))
+samples = paste0(groups,"_",1:4)
+# color samples by assigned DE status
+status <- ifelse(merged_DEres$DiffExp == TRUE & merged_DEres$logFCmean > 0, 1, 
+                       ifelse(merged_DEres$DiffExp == TRUE & merged_DEres$logFCmean < 0, -1, 0) ) 
+# make MDplot
+Glimma::glMDPlot(merged_DEres, xval = "logCPMmean", yval = "logFCmean" , 
+                counts = getCounts(y), samples = samples, groups = groups,
+                anno = merged_DEres, id.column = "Symbol", 
+                display.columns = c("GeneID", "Symbol","Description","Category"),
+                main = "Result", status = status,
+                path = "edgeR_results", folder = "interactive")
+# MDSplot
+Glimma::glMDSPlot(y,groups = groups,labels = samples,path = "edgeR_results",folder = "interactive")
+
+Num <- as.list(table(status))
+names(Num) <- c("DOWN","Unchanged","UP")
+# normal MA plot
+pdf("edgeR_results/DEresult_MAplot.pdf")#, res = 100, width = 800, height = 700)
+ggplot(merged_DEres, aes(logCPMmean, logFCmean)) + geom_point(aes(colour = factor(status)),alpha = 0.5) + 
+        geom_hline(yintercept = 0, col = "red") + 
+        scale_color_manual(values = c("steelblue","grey40","darkred"),labels = c("Down", "unchanged" , "Up")) + 
+        theme_bw(base_size = 15) + 
+        labs(x = "mean log CPM",y = "mean log Fold-Change", col = "Category", 
+             title = paste0("UP : ",Num$UP, "; DOWN : ",Num$DOWN)) 
+dev.off()        
+
+```
+
+<img src="edgeR_results/DEresult_MAplot.png">
+
+### Pathway Enrichment
+
+```{r pathway , echo=FALSE, eval=FALSE}
+system("mkdir edgeR_results/SPIA")
+
+spia_wrap <- function(df, outFile = "edgeR_results/SPIA/spia_DEgenes.out", outPlot = "edgeR_results/SPIA/spia_DEgenes.pdf"){
+        library("org.Hs.eg.db")
+
+        # get ENTREZ id
+        ensToEntrez <- AnnotationDbi::select(org.Hs.eg.db,as.character(df$GeneID),"ENTREZID",
+                                             keytype = "ENSEMBL" )
+
+        df <- merge(df,ensToEntrez,by = 1)
+        df.dg <- dplyr::filter(df, DiffExp == TRUE, !(is.na(ENTREZID)), !(duplicated(ENTREZID)) )
+        df.map <- df.dg$logFCmean
+        names(df.map) <- df.dg$ENTREZID
+        allgenes <- na.omit(as.character(df$ENTREZID)) # can take from any df. it's the universe
+
+        # SPIA
+        spia.degenes <- SPIA::spia(df.map,allgenes,organism = "hsa", nB = 2000)
+        spia.degenes$Name <- substr(spia.degenes$Name,1,20)
+        spia.degenes = spia.degenes[order(spia.degenes$pGFWER),]
+        top <- head(spia.degenes[c(1:6)])
+        colnames(top) <- c("TOP PATHWAYS : NAME",colnames(top)[2:ncol(top)] )
+
+        # Write output
+        if(!is.null(outFile)) pdf(outPlot)
+        SPIA::plotP(spia.degenes)
+        gplots::textplot(top)
+        if(!is.null(outFile)) dev.off()
+
+        write.table(spia.degenes,outFile, sep = "\t", quote = FALSE, row.names = FALSE)
+}
+
+spia_wrap(df = merged_DEres)
+
+## plot outputs
+vivlib::spia_plotBubble("edgeR_results/SPIA/spia_DEgenes.out",outfileName = "edgeR_results/SPIA/spia_topPathways.pdf", 
+                        plotType = 2, title = "Top 20 pathways perturbed")
+vivlib::spia_plotBubble("edgeR_results/SPIA/spia_DEgenes.out",outfileName = "edgeR_results/SPIA/spia_topPathways_plot2.pdf", 
+                        plotType = 1, title = "Top 20 pathways perturbed")
+```
+
+### Plotting individual pathways
+
+I plotted some top pathways enriched by the SPIA analysis on a KEGG map.
+Below, downregulated pathways are colored in RED, upregulated in dark GREEN, and unchanged in GREY.
+
+Most pathway changes are consistant with the previous KD result, except for HTLV-1 infection, which is now going down,
+instead of UP in the previous result.
+
+I am plotting previous and new pathways together to visualize the difference. 
+
+Noticable difference is that some important genes completely flipped their expression: FZD10, MYC, CDKN2b, while many new genes now show expression in new samples (stronger effect overall). 
+
+Cell cycle and cancer have similar effect but the overall direction is not flipped bw old and new.
+
+The reason for the flip is that most DF genes have low fold changes, in both old and new dataset
+
+```{r plotpathways, echo=FALSE,eval=FALSE}
+plotPath <- function(df, pathway_IDs = c("05200","05166","04110")){
+
+        # subset DEgenes and get kegg names for the genes
+        deOut <- dplyr::filter(df, DiffExp == TRUE) %>%
+                dplyr::select(GeneID,logFCmean,Symbol)
+
+        # get entrez IDs
+        message("fetching annotation")
+        tofetch <- "hsapiens_gene_ensembl"
+        ensembl = biomaRt::useMart("ensembl",tofetch)
+
+        ext.data <- biomaRt::getBM(attributes = c("ensembl_gene_id","entrezgene"),filters = "ensembl_gene_id",
+                                   values = deOut$GeneID, mart = ensembl)
+        deOut <- merge(deOut,ext.data, by = 1, all.x = TRUE)
+        deOut <- deOut[!(duplicated(deOut$entrezgene)),]
+        deOut <- na.omit(deOut)
+        deOut <- as.data.frame(deOut[,2], row.names = deOut$entrezgene)
+        colnames(deOut) <- "logFC"
+
+        ## plot selected pathways
+        org <- "hsa"
+        pdf("colorMap.pdf")
+        col <- KEGGprofile::col_by_value(deOut, col = colorRampPalette(c("red", "grey50", "navyblue"))(1024),
+                                         range = c(-6, 6))
+        dev.off()
+        pv.out <- lapply(pathway_IDs,function(x) {
+                KEGGprofile::plot_pathway(gene_expr = deOut, pathway_id = x, bg_col = col, type = "bg",
+                                          text_col = "white",magnify = 1.2, species = org)
+        })
+
+}
+
+
+pathways <- c("05200","05166","04110") # cancer, htlv, nfkappaB,cell cycle
+plotPath(df = merged_DEres, pathway_IDs = pathways)
+
+# move files to a dir
+system("mkdir edgeR_results/pathways_plots;") 
+system("mv hsa* edgeR_results/pathways_plots; mv *.png edgeR_results/pathways_plots")
+system("mv colorMap.pdf edgeR_results/pathways_plots")
+```
+
+#### New HTLV pathway
+
+[colorScale](./edgeR_results/pathways_plots/colorScale.pdf)
+<img src="./edgeR_results/pathways_plots/hsa05166_profile_bg.png">
+
+#### Old HTLV pathway
+[colorScale](../../04_RNASeq/05_Downstream/dhx_seq_Rproject/pathways_plots/colorScale.pdf)
+<img src="../../04_RNASeq/05_Downstream/dhx_seq_Rproject/pathways_plots/hsa05166_profile_bg.png">
+
+
+```{r camera, echo=FALSE,eval=FALSE}
+### Competitive GSEA tests
+# SELECT IDS FROM GENE SETS TO TEST (DIFF GENES WILL BE TESTED)
+set_C2 <- read.delim("edgeR_results/GSEA/CAMERA/c2.all.v5.1.symbols.gmt", header = FALSE, stringsAsFactors = FALSE)
+setC2_list <- select(set_C2, V3:V64) %>% lapply(as.character)
+
+set_all <- read.delim("edgeR_results/GSEA/CAMERA/msigdb.v5.1.symbols.gmt", header = FALSE, stringsAsFactors = FALSE)
+set_all_list <- set_all[3:ncol(set_all)] %>% lapply(as.character)
+
+geneCPMs <- edgeR::cpm(y) %>% + 1 %>% log()
+geneCPMs %<>% merge(merged_DEres, by.x = 0 , by.y = 1) %>% 
+        select(-(logFC_DDR19:Category), -Description) %>% 
+        filter(DiffExp == TRUE)
+indices <- ids2indices(set_all_list, geneCPMs$Symbol,remove.empty = TRUE)
+
+KDgroup <- c(rep(0,4), rep(1,8))
+design2 <- model.matrix(~ KDgroup)
+cam_res <- camera(y = select(geneCPMs, -Row.names, -Symbol, -DiffExp), index = indices,design = design2) 
+
+```
+
+### Conclusions
+
+* Around 2.7K genes go Up and 3.1K genes go DOWN. Most are low fold changes.
+* All major perturbed pathways are Inhibited, including Cancer and HTLV. They all show downregulation of most genes.
+
+

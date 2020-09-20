@@ -1,0 +1,134 @@
+---
+title: "Dhx9 RNAseq : Differential expression"
+author: "@vivekbhr"
+date: "Wed Jun 29 16:30:21 2016"
+output:
+ html_document:
+  css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+  theme: cerulean
+  toc: yes
+---
+        
+```{r loadLibs,  echo=FALSE,eval=TRUE,warning=FALSE,message=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(vivlib)
+library(ggvis)
+library(Glimma)
+```
+
+### Gene counts
+
+For poly-A samples the library had 40-50 Mil reads. ~90% mapped and >70% counted (30-40Mil). 
+Except for one sample: **HEK_s4019_4** which had only 17 Mil reads and 12Mil were counted at the end.
+
+For poly-A minus samples the library had around 30-40 Mil reads. ~85% mapped and ~30% counted into genes (8-12 Mil).
+
+```{r featurecounts, echo=FALSE, eval=TRUE, fig.width=12}
+fcount_out <- read.delim("../02_autoMapping/analysis_results/polyA_plus/featureCounts/counts.txt")
+# dafuq are the dots doin in gene name! Strip 'em
+fcount_out <- tidyr::separate(fcount_out, "X", c("geneID","crap"), "\\.")
+rownames(fcount_out) <- fcount_out$geneID
+fcount_out <- fcount_out[3:length(fcount_out)]
+
+# plot output
+fcount_out.melt <- reshape2::melt(fcount_out)
+fcount_out.melt$value %<>% + 1 %>% log10()
+
+ggvis(fcount_out.melt,~variable, ~value, fill = ~variable) %>% layer_boxplots() %>%
+        add_axis("x",title = "Sample") %>%
+        add_axis("y", title = "Gene counts") %>% add_legend("fill", title = "Sample")
+
+```
+
+## DESeq2 on poly-A transcripts 
+
+Results and plots saved under folder DESeq_results. I have used a statistical design that includes both siRNA2019 and siRNA2020 in the analysis.
+
+```{r DESeq, echo=FALSE, eval=FALSE}
+## DESeq2 , with 1% FDR (last time it was 5%)
+samples <- data.frame(row.names = colnames(fcount_out), 
+                      condition = c(rep("Cnt",4),rep("Trt",8) ),
+                      sample = rep(c("Cnt","KD19","KD20"), each = 4))
+# 
+dds <- DESeqDataSetFromMatrix(countData = fcount_out, colData = samples, design = ~condition)
+dds <- DESeq(dds)
+ddr <- results(dds, alpha = 0.01)
+ddr.df <- as.data.frame(ddr)
+
+# data for PCA/heatmap
+rld <- rlogTransformation(dds)
+select <- order(abs(ddr.df$log2FoldChange), decreasing = TRUE)
+heatmap_data = SummarizedExperiment::assay(rld)[select, ]
+heatmap_topN <- 50
+select_hm <- select[1:heatmap_topN]
+
+# plots
+pdf("DESeq_results/DESeq_plots_all.pdf")
+DESeq2::plotSparsity(dds)
+DESeq2::plotDispEsts(dds)
+print(DESeq2::plotPCA(rld))
+par(mar=c(8,5,2,2))
+boxplot(log10(assays(dds)[["cooks"]]), range=0, las=2)
+DESeq2::plotMA(ddr)
+pheatmap::pheatmap(heatmap_data[select_hm,], cluster_rows = TRUE, 
+                           clustering_method = "average", 
+        show_rownames = TRUE, cluster_cols = FALSE,  
+        main = sprintf("Heatmap : Top %d DE genes (by p-value)", heatmap_topN) )
+dev.off()
+
+## Result
+save(dds, ddr, file = "DESeq_results/polyA_plus_DESeq.Rdata")
+write.table(ddr.df, file = "DESeq_results/polyA_plus_DESeq.out", sep = "\t", quote = FALSE)
+
+sink("DESeq_results/sessionInfo.txt")
+sessionInfo()
+sink()
+
+# annotate
+annotate_DESeqOutput("DESeq_results/polyA_plus_DESeq.out",Output = "DESeq_results/polyA_plus_DESeq.out")
+```
+
+### Visualize the outputs
+
+#### Number of affected genes
+
+```{r barchart, echo=FALSE, eval=TRUE}
+plotStackedBars("DESeq_results/polyA_plus_DESeq.out",fdr = 0.01,sampleName = "PolyA_plus")
+plotVolcano("DESeq_results/polyA_plus_DESeq.out",fdr = 0.01, foldChangeLine = c(2,2),
+                    markGenes = "DHX9", useGeneNames = TRUE)
+```
+
+#### Interactive output
+
+I am playing a bit with interactive dataviz. You can zoom in and out of these plots and search any genes to get the counts. 
+
+In [this output](DESeq_results/interactive/MD-Plot.html) genes which are diff-expressed in KDs are in Red..
+
+```{r annot, echo=FALSE, eval=FALSE}
+# prepare annotations for the plots below
+ddr.df <- read.delim("DESeq_results/polyA_plus_DESeq.out")
+dfgenes <- as.character(ddr.df[which(ddr.df$padj < 0.01 & abs(ddr.df$log2FoldChange) >= 1 ), "Row.names"])
+
+# annotation for interactive result view
+annot <- ddr.df[,c("Row.names","external_gene_name","description")]
+colnames(annot) <- c("GeneID", "Symbol","Description")
+
+```
+
+```{r interact, echo=FALSE, eval=FALSE}
+groups = c(rep("control",4), rep("DDR19",4), rep("DDR20",4))
+samples = paste0(groups,"_",1:4)
+annot$Category <- ifelse(annot$GeneID %in% dfgenes, 1, 0)
+
+Glimma::glMDPlot(dds, anno = annot, id.column = "Symbol", display.columns = c("GeneID", "Symbol","Description"),
+                 samples = samples, groups = groups, main = "Result", status = annot$Category,
+                 path = "DESeq_results", folder = "interactive")
+```
+
+
+### Conclusions
+
+* DE analysis gives same number of genes as before (8-9k).
+* Around 5.5K genes overlap bw siRNAs and 3.3K with old data. So around 3-4k genes are probably reproducibly affected.
+

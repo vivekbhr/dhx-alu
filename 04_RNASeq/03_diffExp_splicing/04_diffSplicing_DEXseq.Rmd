@@ -1,0 +1,165 @@
+---
+title: "Dhx9 RNAseq : Differential Splicing"
+author: "@vivekbhr"
+date: "`r date()`"
+output:
+ html_document:
+  css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+theme: cerulean
+toc: yes
+---
+
+## DEXSeq on poly-A plus data
+
+```{r loadLibs,  echo=FALSE,eval=FALSE,warning=FALSE,message=FALSE}
+library(DEXSeq)
+library(ggplot2)
+library(magrittr)
+library(dplyr)
+library(tibble)
+library(biomaRt)
+BPPARAM = MulticoreParam(workers = 4)
+source("/data/akhtar/bhardwaj/Gitrepo/Subread_to_DEXSeq/load_SubreadOutput.R")
+```
+
+
+```{r dex, echo=FALSE,eval=FALSE}
+# directory to save extra plots
+system("mkdir DEXSeq_results")
+# DEXseq wrapper
+dexwrap <- function(dxd){
+        dxd <- estimateSizeFactors(dxd)
+        dxd <- estimateDispersions(dxd,BPPARAM = BPPARAM)
+        dxd <- testForDEU(dxd,BPPARAM = BPPARAM)
+        dxd <- estimateExonFoldChanges(dxd, fitExpToVar="condition")
+        dxr <- DEXSeqResults(dxd)
+        return(list(dxd = dxd, dxr = dxr))
+}
+
+sampledata <- data.frame(row.names = c(paste0("ctrl_",1:4), paste0("DDR19_",1:4), paste0("DDR20_",1:4)),
+                         condition = c(rep("ctrl",4), rep("test",8)) )
+HTfiles = list.files("featureCounts_exons/DEXcounts", full.names = TRUE)
+dxd <- DEXSeqDataSetFromHTSeq(countfile = HTfiles,
+                               sampleData = sampledata,
+                               flattenedfile = "featureCounts_exons/GRCh38_gencode21_genes-flat.gtf")
+
+dexseq_polyA <- dexwrap(dxd)
+save(dexseq_polyA, file = "DEXSeq_results/DEXSeq_polyA_gencode21-flat_exons.Rdata")
+
+# make html
+DEXSeqHTML(dexseq_polyA$dxr, FDR=0.01, color=c("#FF000080", "#0000FF80"),fitExpToVar = "condition" )
+# write output
+write.table(as.data.frame(dexseq_polyA$dxr), "DEXSeq_results/DEXSeq_polyA_gencode21-flat_exons.out", sep = "\t", quote = F, row.names = F)
+```
+
+### Results (at p < 0.01)
+
+```{r Numbers, echo=FALSE, message=FALSE, warning=FALSE}
+load("DEXSeq_results/DEXSeq_polyA_gencode21-flat_exons.Rdata")
+
+print("how many diffspliced exons?")
+table(dexseq_polyA$dxr$padj < 0.01)
+
+print("How many Up and Down?")
+table(dexseq_polyA$dxr$padj < 0.01 & dexseq_polyA$dxr$log2fold_test_ctrl > 0)[2] %>% as.integer() -> exonsUP
+table(dexseq_polyA$dxr$padj < 0.01 & dexseq_polyA$dxr$log2fold_test_ctrl < 0)[2] %>% as.integer() -> exonsDOWN
+
+print("how many genes?")
+table ( tapply( dexseq_polyA$dxr$padj < 0.01, dexseq_polyA$dxr$groupID, any ) )
+
+print("MA plot")
+pdf("DEXSeq_results/MAplot.pdf")
+DEXSeq::plotMA(dexseq_polyA$dxr, alpha = 0.01, cex = 0.8 ,
+               main = paste0("Differentially Spliced Exons. UP : ",exonsUP," DOWN : ",exonsDOWN))
+dev.off()
+
+
+pdf("DEXSeq_results/SPC24_exons.pdf")
+plotDEXSeq(dexseq_polyA$dxr, "ENSG00000161888.9", displayTranscripts=TRUE, legend=TRUE,splicing = TRUE,norCounts = TRUE,
+           cex.axis=1.2, cex=1.3, lwd=2 ) #
+dev.off()
+
+```
+
+
+### Heatmap of genes by number of affected exons
+
+
+```{r Numbers, echo=FALSE, message=FALSE, warning=FALSE}
+load("DEXSeq_results/DEXSeq_polyA_gencode21-flat_exons.Rdata")
+as.data.frame(dexseq_polyA$dxr) %>% filter(padj < 0.01) %>% 
+        dplyr::select(groupID) %>% unique() -> dex_genes_flat
+as.data.frame(dexseq_polyA$dxr) %>% filter(padj > 0.01) %>% 
+        dplyr::select(groupID) %>% unique() -> nondex_genes_flat
+
+dex_genes_flat %>% splitstackshape::cSplit("groupID","+") %>%
+                as.matrix() %>% as.vector() %>% unique() -> dex_genes # 4444 genes affected
+nondex_genes_flat %>% splitstackshape::cSplit("groupID","+") %>%
+                as.matrix() %>% as.vector() %>% unique() -> nondex_genes
+
+# take out all info for these 4444 genes
+as.data.frame(dexseq_polyA$dxr) %>% filter(groupID %in% dex_genes_flat$groupID) %>% 
+        dplyr::select(groupID, featureID, padj) -> dex_genes_result
+
+dex_genes_result$affected <- ifelse(dex_genes_result$padj < 0.01, TRUE, FALSE)
+dex_genes_result$featureID %<>% gsub("E","",.) %>% as.integer()
+
+# get max exon count and sum of all affected exon number per gene
+dex_genes_result <- data.frame(aggregate(dex_genes_result$featureID, list(gene = dex_genes_result$groupID), FUN = max),
+                            affected = aggregate(dex_genes_result$affected, list(gene = dex_genes_result$groupID), FUN = sum)$x)
+colnames(dex_genes_result) <- c("Gene","numExons","num_affected")
+dex_genes_result %<>% mutate(ratio = num_affected/numExons)
+```
+
+
+### GO enrichment
+
+```{r GO}
+# using clusterprofiler to do a Go analysis
+dex_genes <- gsub("(ENSG[0-9]*).[0-9]*","\\1",dex_genes)
+nondex_genes %<>% gsub("(ENSG[0-9]*).[0-9]*","\\1",.)
+all_genes <- c(rep(1,length(dex_genes)), rep(0,length(nondex_genes)))
+names(all_genes) <- c(dex_genes, nondex_genes)
+all_genes %<>% as.factor()
+
+
+myGOdata <- new( "topGOdata",
+   ontology = "BP",
+   allGenes = all_genes,
+   nodeSize = 10,
+   annot = annFUN.org, mapping = "org.Hs.eg.db", ID="ensembl" )
+
+goTestResults <- runTest( myGOdata, algorithm = "elim", statistic = "fisher" )
+
+allRes <- GenTable(myGOdata, goTestResults)
+
+pdf("DEXSeq_results/Go_enrichment.pdf")
+showSigOfNodes(myGOdata, score(goTestResults), firstSigNodes = 5, useInfo = "all")
+dev.off()
+
+write.table(allRes, file = "DEXSeq_results/dexGenes_GO_enrichment.tab",sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+
+
+### Are the mis-spliced genes more down ?
+
+```{r misdown, echo=FALSE, eval=FALSE}
+# get all up/down genes
+diffexp.genes <- merged_DEres[which(merged_DEres$DiffExp == TRUE),]
+diffexp.genes.diffspliced <- merge(diffexp.genes, as.data.frame(dex_genes), by = 1)
+
+# what fraction of diffexp genes are diffspliced?
+nrow(diffexp.genes.diffspliced)/nrow(diffexp.genes) #29.5%
+(table(diffexp.genes.diffspliced$logFCmean < 0) %>% as.data.frame() -> diffsp.num)
+
+pdf("DEXSeq_results/DEgenes_with_spliceDefect.pdf")
+hist(diffexp.genes$logFCmean, col = rgb(0,0,1,0.6), main = "Fold Changes of affected genes", 
+     xlab = "mean log2(Fold Change)",
+     ylab = "Number of Genes")
+hist(diffexp.genes.diffspliced$logFCmean, col = rgb(1,0,0,0.6), add = T)
+legend("topright", legend = c("All DE genes", "DEgenes with splicing change"), 
+       fill = c("blue","red"))
+dev.off()
+```
