@@ -1,0 +1,441 @@
+---
+title: "Dhx9 RNAseq : Differential expression"
+author: "@vivekbhr"
+date: "`r date()`"
+output:
+ html_document:
+  css: /data/akhtar/bhardwaj/Gitrepo/Markdown_and_Shiny/cssStyles/TOC_forRmd.css
+theme: cerulean
+toc: yes
+---
+        
+```{r loadLibs,  echo=FALSE,eval=TRUE,warning=FALSE,message=FALSE}
+library(plyr)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(vivlib)
+library(tibble)
+library(splitstackshape)
+library(GenomicRanges)
+#system("mkdir circRNA_downstream")
+circdirs <- list.files("../04_circRNA/circRNA_annotation", full.names = TRUE)
+```
+
+## CircRNAs detected
+
+### Circular RNAs detected per sample
+
+polyA-minus samples were used for circRNA detection.
+
+```{r getCircCounts, echo=FALSE,eval=TRUE}
+getcircNums <- function(file){
+        return(system(paste0("wc -l ", file), intern = TRUE))
+}
+
+circNums <- plyr::ldply(circdirs, function(dir){
+                file <- paste0(dir,"/annotate/circ_fusion.txt")
+                return(getcircNums(file))       
+                })
+circNums <- tidyr::separate(circNums,"V1",into = c("Counts","Sample"), sep = " ")
+circNums$Sample %<>% gsub("../04_circRNA/circRNA_annotation/(.*)/annotate/circ_fusion.txt","\\1",.)
+
+circNums$group <- factor(gsub("HEK_(.*)_[0-9]", "\\1", circNums$Sample))
+circNums %<>% dplyr::arrange(Sample,Counts,group)
+circNums$Counts %<>% as.integer()
+
+pdf("circRNA_downstream/circRNAs.png")#, res = 100, height = 800, width = 900)
+ggplot(circNums, aes(Sample, Counts, fill = group, group = group)) + 
+        geom_bar(stat = "identity", position = "dodge") + theme_grey(base_size = 15) + 
+        theme(axis.text.x = element_text(angle = 60, vjust = 0.5)) +
+        scale_fill_manual(values = c("grey20","darkgreen","steelblue")) + coord_flip()
+dev.off()
+
+# point plot
+circNums.point <- circNums
+circNums.point$Sample <- c(rep("Control",4), rep("knockdown",8))
+circNums.point$group <- rep(c("Control","DDR19","DDR20"), each = 4)
+
+pdf("circRNA_downstream/circRNAs_points.png")#, res = 100, height = 800, width = 900)
+ggplot(circNums.point, aes(Sample,Counts, col = group)) + 
+        geom_jitter(position = position_jitter(width = 0.4), size = 2) + 
+        theme_grey(base_size = 15) + 
+        theme(axis.text.x = element_text(angle = 60, vjust = 0.5)) +
+        scale_color_manual(values = c("grey20","darkred","darkorange")) + 
+        stat_summary(fun.y=mean, geom="point", colour = "blue", size = 3) 
+dev.off()
+
+```
+
+### Genes producing circRNA (control vs test)
+
+```{r plotNum, echo=FALSE, eval=TRUE}
+## read all the data
+## COLUMN DESCRIPTION COPIED FROM CIRCexP DOCUMENTATION
+circRNAs <- lapply(circdirs, function(dir){
+                file <- paste0(dir,"/annotate/circ_fusion.txt")
+                colNames <- c("chrom","start","end","name","score","strand","thickStart","thickEnd","itemRgb",
+                "exonCount","exonSize","exonOffsets","readNumber","circType","geneName","isoformName",
+                "index","flankIntron")
+                
+                filedata <- read.delim(file, header = FALSE, stringsAsFactors = FALSE)
+                colnames(filedata) <- colNames
+                return(filedata)       
+                })
+sampleNames <- gsub("../04_circRNA/circRNA_annotation/(.*)","\\1",circdirs)
+names(circRNAs) <- sampleNames
+
+# combine circRNAs from control/test, intersect and compare the numbers.
+circRNAs <- plyr::ldply(circRNAs, function(x) {
+        x$circName <- paste(x$chrom, x$start, x$end, sep = "_")
+        return(x)
+})
+
+
+# get the circRNA coord and flankIntron coord
+#circNames <- plyr::ldply(circRNAs, function(x) {
+#        df <- data.frame(circ_name = x$circName,
+ #                        flank_exon = x$flankIntron)
+#        return(df)
+#})
+
+# set of control/test circRNAs with their nearby introns
+circNames.pair <- list(allcontrol = dplyr::filter(circRNAs, grepl("ctrl",.id)),
+                       alltest =  dplyr::filter(circRNAs, grepl("s40",.id)) )
+
+# total unique circRNAs in control and test (Unique circRNAs are defined by their coordinates)
+circNames.set <- list(ctrl = unique(circNames.pair$allcontrol$circName ), # 25658
+                      test = unique(circNames.pair$alltest$circName) )  # 50355
+
+lapply(circNames.set, length)
+length(setdiff(circNames.set$test, circNames.set$ctrl)) # 33875 uniq to test
+length(setdiff(circNames.set$ctrl, circNames.set$test)) # 9178 uniq to ctrl
+
+# count gene in cont vs test and make a vennDiagram
+circGenes <- lapply(circRNAs, function(x) return(unique(x$geneName)))
+circGenes <- list(control = unique(unlist(circGenes[1:4])),
+                  test = unique(unlist(circGenes[5:12]))
+                        )
+common <- intersect(circGenes$control, circGenes$test) #6295 common genes
+Kd_unique <- setdiff(circGenes$test, circGenes$control)
+cont_unique <- setdiff(circGenes$control, circGenes$test)
+
+## Venn
+pdf("circRNA_downstream/circRNA_numbers.pdf")#,res = 100,width = 500, height = 500)
+plot.new()
+VennDiagram::draw.pairwise.venn(length(circGenes$control), length(circGenes$test), length(common), 
+                   category = c("Control", "DHX9_KD"), 
+                   lty = rep("blank", 2), fill = c("light blue", "pink"), 
+                   alpha = rep(0.5, 2), cat.pos = c(-30,30), cat.dist = rep(0.025, 2))
+dev.off()
+
+# overlapping bars
+circOverlap <- data.frame(Category = c("Test","Control","Intersect"), 
+                          Number = c(length(Kd_unique), 
+                                     length(cont_unique), 
+                                     length(common))
+                          )
+circOverlap %<>% reshape2::melt()
+
+pdf("circRNA_downstream/circRNA_numbers_bar.pdf")#,res = 100,width = 800, height = 200)
+ggplot(arrange(circOverlap, Category), aes(variable, value, fill = Category, order = Category)) + 
+        geom_bar(stat = "identity") + 
+        scale_fill_manual(values = c("steelblue","darkred","grey20")) +
+        labs(y = "circRNA Numbers", x = "") +
+        coord_flip()
+dev.off()
+
+```
+
+
+### Counts of commonly detected circRNAs (Control vs test)
+
+* Note that **Common** is defined as common between control and test set. means even if one sample in test and control set detect that circRNA, it's in the common category.
+
+```{r plotCounts, echo=FALSE, eval=FALSE}
+# Aggregate junction counts for each sample by Gene ID,
+getCirc_byGene <- function(df, norm=TRUE) {
+        dfSum <- split(df, factor(df$geneName)) %>% ldply(function(x) sum(x$readNumber))
+        colnames(dfSum) <- c("geneName","circReads")
+        # crude normalization by Lib size (per 10K reads)
+        n <- ifelse(isTRUE(norm), 10000, 1)
+        dfSum$circReads <- (dfSum$circReads/sum(dfSum$circReads))*n
+        
+        return(dfSum)
+}
+
+t <- lapply(circRNAs, getCirc_byGene)
+
+## now merge all the dfs into one
+all_circCounts <- Reduce(function(x,y) merge(x,y,by = "geneName", all=T), t) 
+colnames(all_circCounts) <- c("geneName", names(circRNAs))
+
+## Then take out only those genes which are in the "common" list
+common_circCounts <- dplyr::filter(all_circCounts, geneName %in% common)
+
+## many columns now have NA counts, since common is not common bw all samples.
+## replace NA by zero
+common_circCounts[is.na(common_circCounts)] <- 0
+
+
+common_circCounts.mean <- data_frame(geneName = common_circCounts$geneName, 
+                                     control = select(common_circCounts, contains("ctrl")) %>% rowMeans(),
+                                     test = select(common_circCounts, -contains("ctrl"), -geneName) %>% rowMeans())
+
+png("circRNA_downstream/circRNA_difference.png", res = 100, height = 500, width = 600)
+reshape2::melt(common_circCounts.mean) %>% 
+        ggplot(., aes(variable, value, fill = variable)) + 
+        geom_boxplot(alpha = 0.2, notch = TRUE) + scale_y_log10() +
+        labs(x = "Sample", y = "circRNA read count (per Gene)", fill = "Sample")
+dev.off()
+```
+
+Find highly up circRNAs. Flacnking intron name can be used as a common ID to find common circRNAs.
+
+```{r circhm}
+c <- lapply(circRNAs, function(x) return(dplyr::select(x, flankIntron, readNumber)))
+
+hm <- Reduce(function(x,y) merge(x,y, all = T, by = "flankIntron"), c)
+sampl <- names(c)
+colnames(hm) <- c("flankIntron", paste0("sample_",sampl))
+hm <- na.omit(hm)
+
+hm <- data.frame(flankIntron = hm$flankIntron, 
+                                     control = select(hm, contains("ctrl")) %>% rowMeans(),
+                                     test = select(hm, -contains("ctrl"), -flankIntron) %>% rowMeans())
+
+t <- hm$test/hm$control
+hm$flankIntron <- gsub("\\|","_",hm$flankIntron)
+## Most highly upregulated circRNAs
+write.table(hm[head(order(t, decreasing = TRUE), 20),], file = "highlyUP_circRNAs", sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+### Is circRNA difference due to depth
+
+```{r depthcheck, echo=FALSE}
+circfiles <- list.files("../04_circRNA/circRNA_mapping", full.names = TRUE)
+
+circCounts <- 
+        plyr::ldply(circfiles,function(x){
+        base <- sub("star_","",basename(x))
+        report <- read.delim(paste0(x,"/",base,"Log.final.out"),header = FALSE, stringsAsFactors = FALSE)
+        report <- report[c(8,23),]
+        report$sample <- base
+        return(report)
+})
+circCounts$V2 %<>% as.integer()
+circCounts.total <- aggregate(circCounts$V2, list(sample = circCounts$sample), FUN=sum )
+
+print("are total mapped reads different bw control and test")
+t.test(circCounts.total[1:4,"x"], circCounts.total[5:nrow(circCounts.total),"x"], alternative = "less")
+
+print("are uniq mapped reads different")
+t.test(circCounts[seq(1,8,2),"V2"], circCounts[seq(9,24,2),"V2"], alternative = "less")
+```
+
+
+### Do circRNA introns contain Alu
+
+I will overlap the circRNAs introns produced uniquely in KD samples, with the Alus, and compare them to control uniq circRNAs.
+
+```{r circAlu}
+# get test and control uniq circRNAs
+testuniq <- circNames.pair$alltest[-which(circNames.pair$alltest$circName %in%
+                                                  circNames.pair$allcontrol$circName),]
+contuniq <- circNames.pair$allcontrol[-which(circNames.pair$allcontrol$circName %in%
+                                                     circNames.pair$alltest$circName),]
+## Get Alu coordinates as GRanges
+system("grep Alu /data/akhtar/bhardwaj/my_annotations/human_hg38/Repeats/hg38.repeatmasker.bed > hg38_alus.bed")
+alus_gr <- rtracklayer::import.bed("hg38_alus.bed")
+
+getAluOverlap <- function(circdata, alus_granges) {
+        
+        # first get overall alu overlap in circRNA coord
+        circname_gr <- unique(GRanges(circdata$chrom, 
+                               IRanges(circdata$start, circdata$end),
+                               strand = circdata$strand, name = circdata$circName))
+        circname_gr$aluOverlap <- overlapsAny(circname_gr, alus_granges,ignore.strand = TRUE)
+        # which circRNAs have Alus in between the exons (save them)
+        circname_gr[circname_gr$aluOverlap == TRUE]$name -> inside_overlapping
+        
+        print("What prop of circRNAs have Alus in between the exons?")
+        print(sum(circname_gr$aluOverlap)/length(circname_gr))
+        
+        # Now get overlap in flanking exons 
+        circdata <-  tidyr::separate(data = circdata, 
+                                     col = 'flankIntron', 
+                                     into = c("flankIntron_left_chr","flankIntron_left_start","flankIntron_left_end",
+                                              "flankIntron_right_chr","flankIntron_right_start","flankIntron_right_end"),
+                                     regex =  ".")
+        
+        # 12 circRNAs have no introns, remove them
+        circdata %<>% filter(flankIntron_left_chr != "None") %>% unique()
+        
+        # many circRNAs have only one intron, seperately process circRNAs with both introns
+        flankIntron_right <- dplyr::select(circdata, contains("flankIntron_right"),  circName) %>% na.omit()
+        colnames(flankIntron_right) <- c("chr", "start", "end","circName")
+        
+        ## GRanges for left Intron
+        circdata_gr <- GRanges(circdata$flankIntron_left_chr, 
+                               IRanges(circdata$flankIntron_left_start %>% as.numeric(),
+                                       circdata$flankIntron_left_end %>% as.numeric() ), name = circdata$circName )
+        # for right intron
+        circdata_gr.right <- GRanges(flankIntron_right$chr, 
+                                     IRanges(flankIntron_right$start %>% as.numeric(),
+                                             flankIntron_right$end %>% as.numeric() ), 
+                                     name = flankIntron_right$circName )
+        
+        # overlap alus with introns
+        circdata_gr$aluOverlap <- overlapsAny(circdata_gr, alus_granges)
+        over <- countOverlaps(circdata_gr, alus_granges)
+        
+        print("how many circRNAs are we testing?")
+        print(circdata_gr$name %>% unique() %>% length() -> p) # 33818
+        print("how many of the circRNAs have alus on left flanking intron?") # count circRNas, not introns
+        left_Overlapping <- circdata_gr[circdata_gr$aluOverlap == TRUE]$name %>% unique()
+        print( length(left_Overlapping) -> p1 )#27792
+        
+        
+        
+        # since I can't overlap both left and right sides at once (due to right side having NAs)
+        # I am taking the left sides which didn't overlap, check if it has intron on the right side
+        # and then overlap them with Alus. Finally add the numbers
+        
+        print("how many are left (should be p2 - p1)")
+        left_nonOverlapping <- circdata_gr[circdata_gr$aluOverlap == FALSE]$name %>% unique() # 6026
+        print(length(left_nonOverlapping))
+        print("out of these guys, how many have an intron on the right side")
+        non <- circdata_gr.right[circdata_gr.right$name %in% left_nonOverlapping]
+        
+        non$name %>% unique() %>% length() %>% print() # 4415
+        print("how many of them overlap with Alus")
+        non$aluOverlap <- overlapsAny(non, alus_granges)
+        right_Overlapping <- non[non$aluOverlap == TRUE]$name %>% unique()
+        
+        # counts
+        over.either <- c(over, countOverlaps(non, alus_granges))
+        print(non[non$aluOverlap == TRUE]$name %>% unique() %>% length() -> p2) #2863
+        
+        print("so overall % of circRNAs that overlap with Alus on either side (compared to total) is")
+        num <- ((p1 + p2)/p)*100
+        print(num)
+        
+        print("Finally. overall % of circRNAs which overlap Alus either inside them, or flanking")
+        
+        print(length(unique(c(left_Overlapping, right_Overlapping, inside_overlapping)))/p)
+        
+        # how many of the circRNAs overlap Alus on both sides (left + right)
+        left_over <- circdata_gr.right[circdata_gr.right$name %in% left_Overlapping]
+        print("how many circRNAs with Alus on left, have an intron on right?")
+        left_over$name %>% unique() %>% length() %>% print()
+        
+        print("How many of them overlap with Alus on right?")
+        left_over$aluOverlap <- overlapsAny(left_over, alus_granges)
+        print(left_over[left_over$aluOverlap == TRUE]$name %>% unique() %>% length() -> b) 
+        # count
+        over.both <- c(over, countOverlaps(left_over, alus_granges))
+        
+        print("so overall % of circRNAs that overlap with Alus on BOTH sides (compared to total) is")
+        num.both <- ((b)/p)*100
+        print(num.both)
+        
+        
+        overlaps <- list(Either = list(counts = over.either, overlapping = p1 + p2, total = p),
+                         Both = list(counts = over.both, overlapping = b, total = p),
+                         left_Overlapping = left_Overlapping,
+                         right_Overlapping = right_Overlapping,
+                         left_nonOverlapping = left_nonOverlapping)
+        
+        return(overlaps)
+        
+}
+        
+
+sink("circRNA_alutests.txt")
+print("Stats for CircRNAs unique in TEST :: ")
+# for testuniq
+test_aluOver <- getAluOverlap(circdata = testuniq, alus_granges = alus_gr)
+print("Stats for CircRNAs unique in CONTROL :: ")
+# for controlUniq
+cont_aluOver <- getAluOverlap(circdata = contuniq, alus_granges = alus_gr)
+
+
+# Do a fisher's test
+df.either <- data.frame(row.names = c("test","control"),
+                        overlap = c(test_aluOver$Either$overlapping, cont_aluOver$Either$overlapping), 
+                        no_overlap = c(test_aluOver$Either$total - test_aluOver$Either$overlapping,
+                                       cont_aluOver$Either$total - cont_aluOver$Either$overlapping)
+)
+
+df.both <- data.frame(row.names = c("test","control"),
+                      overlap = c(test_aluOver$Both$overlapping, cont_aluOver$Both$overlapping), 
+                      no_overlap = c(test_aluOver$Both$total - test_aluOver$Both$overlapping,
+                                     cont_aluOver$Both$total - cont_aluOver$Both$overlapping)
+)
+
+# fisher's test
+print("Fisher's test for Test/Control - No. of Alus on Either side (left/right) : ")
+fisher.test(df.either,conf.int = TRUE)
+print("Fisher's test for Test/Control - No. of Alus on BOTH sides : ")
+fisher.test(df.both,conf.int = TRUE)
+
+sink()
+
+# annotate the circRNA counts df and write back
+left_alu <- c(test_aluOver$left_Overlapping, cont_aluOver$left_Overlapping)
+right_alu <- c(test_aluOver$right_Overlapping, cont_aluOver$right_Overlapping)
+
+circRNAs_df <- plyr::ldply(circRNAs, data.frame)
+circRNAs_df$left_Alu <- ifelse(circRNAs_df$circName %in% left_alu, "YES","NO")
+circRNAs_df$right_Alu <- ifelse(circRNAs_df$circName %in% right_alu, "YES","NO")
+        
+write.table(circRNAs_df, file = "circRNAs_allSamples_annotated.tsv", sep = "\t", quote = FALSE, row.names = FALSE)        
+```
+
+
+### circRNA status on DE genes
+
+```{r circOnDE, echo=FALSE, eval=FALSE}
+# plot newly detected circRNA genes on MA plot
+merged_DEres <- read.delim("../03_diffExp_splicing/edgeR_results/polyA_plus_DEgenes.out")
+merged_DEres$new_circRNA <- ifelse(merged_DEres$Symbol %in% Kd_unique, "green", "grey80")
+
+status <- ifelse(merged_DEres$DiffExp == TRUE & merged_DEres$logFCmean > 0, 1, 
+                       ifelse(merged_DEres$DiffExp == TRUE & merged_DEres$logFCmean < 0, -1, 0) ) 
+
+png("circRNA_downstream/circRNA_in_DEgenes.png", res = 100, width = 800, height = 600)
+ggplot(merged_DEres, aes(logCPMmean, logFCmean)) + 
+        geom_point(aes(colour = factor(status)) , size = 1) + 
+        geom_point(colour = factor(merged_DEres$new_circRNA), alpha = 0.4, size = 2) +
+        geom_hline(yintercept = 0, col = "red") + 
+        scale_color_manual(values = c("steelblue","grey80","firebrick3"),labels = c("Down", "unchanged" , "Up")) + 
+        theme_bw(base_size = 15) + 
+        labs(x = "mean log CPM",y = "mean log Fold-Change", col = "Category") 
+dev.off()           
+
+```
+
+### CircRNA status on Differentially Spliced Genes
+
+```{r circDiff, echo=FALSE, eval=FALSE}
+dxr <- read.delim("../03_diffExp_splicing/DEXSeq_results/DEXSeq_polyA_gencode21-flat_exons.out")
+# split the DF by genes in the geneID column
+dxr <- splitstackshape::cSplit(dxr, "groupID","+")
+# get diff genes (adding all genes column after splitting by "+", then taking unique)
+filter(dxr, padj < 0.01) %>% select(contains("groupID")) %>% 
+        unique() %>% as.matrix() %>% as.vector %>% unique() %>% 
+                as.data.frame() %>% tidyr::separate(".",c("geneID","crap"), "\\.") -> diffSpliced_genes
+
+## annotate for gene names
+library(biomaRt)
+mart <- useMart("ENSEMBL_MART_ENSEMBL",dataset = "hsapiens_gene_ensembl")
+ext.data <- getBM(attributes = c("ensembl_gene_id","external_gene_name","description"),
+                                           mart = mart)
+diffSpliced_genes <- merge(diffSpliced_genes, ext.data, by = 1, all.x = TRUE)
+
+## intersect with circGenes
+length(intersect(Kd_unique, diffSpliced_genes$external_gene_name)) # 668 genes
+# total genes in set
+length(union(Kd_unique, diffSpliced_genes$external_gene_name))
+```
